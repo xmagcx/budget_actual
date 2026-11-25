@@ -24,7 +24,7 @@ void i18n
   .use(initReactI18next)
   .use(resourcesToBackend(loadLanguage))
   .init({
-    lng: 'en',
+    lng: 'es',
 
     // allow keys to be phrases having `:`, `.`
     nsSeparator: false,
@@ -40,8 +40,8 @@ void i18n
   });
 
 const resolveLanguage = (language: string) => {
-  // English is always available since we use natural-language keys.
-  if (language === 'en') return 'en';
+  // English and Spanish are always available.
+  if (language === 'en' || language === 'es') return language;
 
   if (isLanguageAvailable(language)) return language;
 
@@ -66,7 +66,7 @@ export const setI18NextLanguage = (language: string | null) => {
   const defaultLanguages = Array.isArray(navigator.languages)
     ? navigator.languages
     : [navigator.language || 'en'];
-  const languagesToTry = language ? [language] : defaultLanguages;
+  const languagesToTry = language ? [language] : ['es', ...defaultLanguages];
 
   let resolved: string | undefined;
 
@@ -76,13 +76,13 @@ export const setI18NextLanguage = (language: string | null) => {
   }
 
   if (!resolved) {
-    // Fall back to English
+    // Fall back to Spanish
     console.info(
       language
-        ? `Unknown locale ${language}, falling back to en`
-        : `Unknown locales [${languagesToTry.join(', ')}] falling back to en`,
+        ? `Unknown locale ${language}, falling back to es`
+        : `Unknown locales [${languagesToTry.join(', ')}] falling back to es`,
     );
-    resolved = 'en';
+    resolved = 'es';
   }
 
   if (resolved === i18n.language) {

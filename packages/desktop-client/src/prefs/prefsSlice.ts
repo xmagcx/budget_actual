@@ -71,7 +71,7 @@ export const loadPrefs = createAppAsyncThunk(
     );
 
     // We need to load translations before the app renders
-    setI18NextLanguage(globalPrefs.language ?? '');
+    setI18NextLanguage(globalPrefs.language ?? 'es');
 
     return prefs;
   },
@@ -98,6 +98,14 @@ export const loadGlobalPrefs = createAppAsyncThunk(
       savesBeforeLoad = globalPrefsSaveCount;
       globalPrefs = await send('load-global-prefs');
     } while (savesBeforeLoad !== globalPrefsSaveCount);
+
+    if (!globalPrefs.language) {
+      globalPrefs = { ...globalPrefs, language: 'es' };
+      await send('save-global-prefs', { language: 'es' });
+      globalPrefsSaveCount++;
+    }
+
+    setI18NextLanguage(globalPrefs.language ?? 'es');
 
     dispatch(
       setPrefs({

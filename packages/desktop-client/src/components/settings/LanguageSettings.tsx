@@ -14,15 +14,22 @@ import { SettingsGroup } from './SettingsGroup';
 import { SettingsRow } from './SettingsRow';
 
 const languageDisplayNameOverride: { [key: string]: string } = {
+  en: 'English',
+  es: 'Español',
   'pt-BR': 'Português (Brasil)',
 };
 
-const languageOptions = (t: TFunction): SelectOption[] =>
-  [
+const requiredLanguages = ['en', 'es'];
+
+const languageOptions = (t: TFunction): SelectOption[] => {
+  const languageSet = new Set([...requiredLanguages, ...availableLanguages]);
+  const languageList = Array.from(languageSet);
+
+  return [
     ['', t('System default')] as [string, string],
     Menu.line as typeof Menu.line,
   ].concat(
-    availableLanguages.map(lang => [
+    languageList.map(lang => [
       lang,
       lang in languageDisplayNameOverride
         ? languageDisplayNameOverride[lang]
@@ -31,11 +38,12 @@ const languageOptions = (t: TFunction): SelectOption[] =>
           }).of(lang) || lang,
     ]),
   );
+};
 
 export function LanguageSettings() {
   const { t } = useTranslation();
   const [language, setLanguage] = useGlobalPref('language');
-  const isEnabled = !!availableLanguages.length;
+  const isEnabled = availableLanguages.length > 0;
 
   return (
     <SettingsGroup title={t('Language')}>

@@ -30,12 +30,12 @@ describe('setI18NextLanguage', () => {
 
   afterEach(vi.unstubAllGlobals);
 
-  test('should set system default language when no language is provided', () => {
-    vi.stubGlobal('navigator', { language: 'uk' });
+  test('should default to Spanish when no language is provided', () => {
+    vi.stubGlobal('navigator', { language: 'uk', languages: ['uk'] });
 
     setI18NextLanguage('');
 
-    expect(vi.mocked(i18n).changeLanguage).toHaveBeenCalledWith('uk');
+    expect(vi.mocked(i18n).changeLanguage).toHaveBeenCalledWith('es');
   });
 
   test('should set the provided language if it is available', () => {
@@ -46,15 +46,15 @@ describe('setI18NextLanguage', () => {
     expect(vi.mocked(i18n).changeLanguage).toHaveBeenCalledWith(language);
   });
 
-  test('should fallback to English if the provided language is unavailable', () => {
+  test('should fallback to Spanish if the provided language is unavailable', () => {
     vi.spyOn(console, 'info');
 
     setI18NextLanguage('unknown');
 
     expect(console.info).toHaveBeenCalledWith(
-      'Unknown locale unknown, falling back to en',
+      'Unknown locale unknown, falling back to es',
     );
-    expect(vi.mocked(i18n).changeLanguage).toHaveBeenCalledWith('en');
+    expect(vi.mocked(i18n).changeLanguage).toHaveBeenCalledWith('es');
   });
 
   test('should successfully use a language with a region code if it is known', () => {
