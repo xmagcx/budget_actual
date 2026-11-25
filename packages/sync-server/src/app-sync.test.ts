@@ -13,6 +13,8 @@ import request from 'supertest';
 
 import { getAccountDb } from './account-db';
 import { handlers as app } from './app-sync';
+import { getTursoClient } from './storage/turso-client';
+import { getUserBlobStore } from './storage/user-blob-store';
 import { getPathForUserFile, isValidFileId } from './util/paths';
 
 const ADMIN_ROLE = 'ADMIN';
@@ -36,6 +38,44 @@ function generateFileId() {
   }
   return id;
 }
+
+const isTursoStorageBackend = process.env.ACTUAL_STORAGE_BACKEND === 'turso';
+const itLocalStorage = isTursoStorageBackend ? it.skip : it;
+
+async function writeUserBlob(fileId: string, content: string | Buffer) {
+  const buffer = typeof content === 'string' ? Buffer.from(content) : content;
+  await getUserBlobStore().write(fileId as any, buffer);
+}
+
+async function readUserBlobAsUtf8(fileId: string) {
+  const content = await getUserBlobStore().read(fileId as any);
+  return content.toString('utf8');
+}
+
+function cleanupUserBlob(fileId: string) {
+  onTestFinished(async () => {
+    try {
+      await getUserBlobStore().delete(fileId as any);
+    } catch {
+      // Ignore cleanup failures.
+    }
+  });
+}
+
+beforeEach(async () => {
+  if (!isTursoStorageBackend) {
+    return;
+  }
+
+  await getTursoClient().batch(
+    [
+      { sql: 'DELETE FROM user_blobs' },
+      { sql: 'DELETE FROM group_messages_binary' },
+      { sql: 'DELETE FROM group_messages_merkles' },
+    ],
+    'write',
+  );
+});
 
 describe('/user-get-key', () => {
   it('returns 401 if the user is not authenticated', async () => {
@@ -517,11 +557,7 @@ describe('/upload-user-file', () => {
     const fileContentBuffer = Buffer.from(fileContent);
     const syncVersion = 2;
     const encryptMeta = JSON.stringify({ keyId: 'key-id' });
-    onTestFinished(() => {
-      try {
-        fs.unlinkSync(getPathForUserFile(fileId));
-      } catch {}
-    });
+    cleanupUserBlob(fileId);
 
     // Verify that the file does not exist before upload
     const rowsBefore = getAccountDb().all('SELECT * FROM files WHERE id = ?', [
@@ -555,10 +591,8 @@ describe('/upload-user-file', () => {
     expect(rowsAfter[0].name).toEqual(fileName);
     expect(rowsAfter[0].encrypt_meta).toEqual(encryptMeta);
 
-    // Verify that the file was written to the file system
-    const filePath = getPathForUserFile(fileId);
-    const writtenContent = await fs.promises.readFile(filePath, 'utf8');
-    expect(writtenContent).toEqual(fileContent);
+    // Verify that the file was written to storage
+    expect(await readUserBlobAsUtf8(fileId)).toEqual(fileContent);
   });
 
   it('uploads and updates an existing file successfully', async () => {
@@ -576,11 +610,7 @@ describe('/upload-user-file', () => {
       keyId: oldKeyId,
       sentinelValue: 1,
     }); //keep the same key, but change other things
-    onTestFinished(() => {
-      try {
-        fs.unlinkSync(getPathForUserFile(fileId));
-      } catch {}
-    });
+    cleanupUserBlob(fileId);
 
     // Create the old file version
     getAccountDb().mutate(
@@ -595,7 +625,7 @@ describe('/upload-user-file', () => {
       ],
     );
 
-    fs.writeFileSync(getPathForUserFile(fileId), oldFileContent);
+    await writeUserBlob(fileId, oldFileContent);
 
     const res = await request(app)
       .post('/upload-user-file')
@@ -623,10 +653,8 @@ describe('/upload-user-file', () => {
     expect(rowsAfter[0].name).toEqual(newFileName);
     expect(rowsAfter[0].encrypt_meta).toEqual(newEncryptMeta);
 
-    // Verify that the file was written to the file system
-    const filePath = getPathForUserFile(fileId);
-    const writtenContent = await fs.promises.readFile(filePath, 'utf8');
-    expect(writtenContent).toEqual(newFileContent);
+    // Verify that the file was written to storage
+    expect(await readUserBlobAsUtf8(fileId)).toEqual(newFileContent);
   });
 
   it('returns 400 if the file is part of an old group', async () => {
@@ -692,7 +720,6 @@ describe('/upload-user-file', () => {
     const groupId = 'group-id';
     const keyId = 'key-id';
     const syncVersion = 2;
-    fs.writeFileSync(getPathForUserFile(fileId), 'existing content');
     getAccountDb().mutate(
       'INSERT INTO files (id, group_id, sync_version, name, encrypt_meta, encrypt_keyid, deleted, owner) VALUES (?, ?, ?, ?, ?, ?, 0, ?)',
       [
@@ -705,11 +732,6 @@ describe('/upload-user-file', () => {
         OTHER_USER_ID,
       ],
     );
-    onTestFinished(() => {
-      try {
-        fs.unlinkSync(getPathForUserFile(fileId));
-      } catch {}
-    });
 
     const res = await request(app)
       .post('/upload-user-file')
@@ -733,7 +755,7 @@ describe('/upload-user-file', () => {
     const syncVersion = 2;
     const existingContent = 'existing content';
     const newContent = 'admin overwrite content';
-    fs.writeFileSync(getPathForUserFile(fileId), existingContent);
+    await writeUserBlob(fileId, existingContent);
     getAccountDb().mutate(
       'INSERT INTO files (id, group_id, sync_version, name, encrypt_meta, encrypt_keyid, deleted, owner) VALUES (?, ?, ?, ?, ?, ?, 0, ?)',
       [
@@ -746,11 +768,7 @@ describe('/upload-user-file', () => {
         OTHER_USER_ID,
       ],
     );
-    onTestFinished(() => {
-      try {
-        fs.unlinkSync(getPathForUserFile(fileId));
-      } catch {}
-    });
+    cleanupUserBlob(fileId);
 
     const res = await request(app)
       .post('/upload-user-file')
@@ -766,58 +784,59 @@ describe('/upload-user-file', () => {
     expect(res.statusCode).toEqual(200);
     expect(res.body).toEqual({ status: 'ok', groupId });
 
-    expect(fs.readFileSync(getPathForUserFile(fileId), 'utf8')).toEqual(
-      newContent,
-    );
+    expect(await readUserBlobAsUtf8(fileId)).toEqual(newContent);
     const rows = getAccountDb().all('SELECT name FROM files WHERE id = ?', [
       fileId,
     ]);
     expect(rows[0].name).toEqual('admin-renamed.txt');
   });
 
-  it('returns 500 and keeps the existing file when the write fails', async () => {
-    const fileId = generateFileId();
-    const groupId = 'write-failure-group-id';
-    const keyId = 'key-id';
-    const syncVersion = 2;
-    const encryptMeta = JSON.stringify({ keyId });
-    const originalContent = 'original good content';
-    const filePath = getPathForUserFile(fileId);
+  itLocalStorage(
+    'returns 500 and keeps the existing file when the write fails',
+    async () => {
+      const fileId = generateFileId();
+      const groupId = 'write-failure-group-id';
+      const keyId = 'key-id';
+      const syncVersion = 2;
+      const encryptMeta = JSON.stringify({ keyId });
+      const originalContent = 'original good content';
+      const filePath = getPathForUserFile(fileId);
 
-    getAccountDb().mutate(
-      'INSERT INTO files (id, group_id, sync_version, name, encrypt_meta, encrypt_keyid) VALUES (?, ?, ?, ?, ?, ?)',
-      [fileId, groupId, syncVersion, 'failing.txt', encryptMeta, keyId],
-    );
-    fs.writeFileSync(filePath, originalContent);
-    onTestFinished(() => {
-      try {
-        fs.unlinkSync(filePath);
-      } catch {}
-    });
-
-    // Some bytes land on disk before the write rejects.
-    const writeFileSpy = vi
-      .spyOn(fsPromises, 'writeFile')
-      .mockImplementationOnce(async path => {
-        fs.writeFileSync(path as fs.PathLike, 'PARTIAL-GARBAGE');
-        throw new Error('simulated disk failure');
+      getAccountDb().mutate(
+        'INSERT INTO files (id, group_id, sync_version, name, encrypt_meta, encrypt_keyid) VALUES (?, ?, ?, ?, ?, ?)',
+        [fileId, groupId, syncVersion, 'failing.txt', encryptMeta, keyId],
+      );
+      fs.writeFileSync(filePath, originalContent);
+      onTestFinished(() => {
+        try {
+          fs.unlinkSync(filePath);
+        } catch {}
       });
-    onTestFinished(() => writeFileSpy.mockRestore());
 
-    const res = await request(app)
-      .post('/upload-user-file')
-      .set('Content-Type', 'application/encrypted-file')
-      .set('x-actual-token', 'valid-token')
-      .set('x-actual-name', 'failing.txt')
-      .set('x-actual-file-id', fileId)
-      .set('x-actual-group-id', groupId)
-      .set('x-actual-format', syncVersion.toString())
-      .set('x-actual-encrypt-meta', encryptMeta)
-      .send(Buffer.from('new content that should not land'));
+      // Some bytes land on disk before the write rejects.
+      const writeFileSpy = vi
+        .spyOn(fsPromises, 'writeFile')
+        .mockImplementationOnce(async path => {
+          fs.writeFileSync(path as fs.PathLike, 'PARTIAL-GARBAGE');
+          throw new Error('simulated disk failure');
+        });
+      onTestFinished(() => writeFileSpy.mockRestore());
 
-    expect(res.statusCode).toEqual(500);
-    expect(fs.readFileSync(filePath, 'utf8')).toEqual(originalContent);
-  });
+      const res = await request(app)
+        .post('/upload-user-file')
+        .set('Content-Type', 'application/encrypted-file')
+        .set('x-actual-token', 'valid-token')
+        .set('x-actual-name', 'failing.txt')
+        .set('x-actual-file-id', fileId)
+        .set('x-actual-group-id', groupId)
+        .set('x-actual-format', syncVersion.toString())
+        .set('x-actual-encrypt-meta', encryptMeta)
+        .send(Buffer.from('new content that should not land'));
+
+      expect(res.statusCode).toEqual(500);
+      expect(fs.readFileSync(filePath, 'utf8')).toEqual(originalContent);
+    },
+  );
 });
 
 describe('/download-user-file', () => {
@@ -883,7 +902,7 @@ describe('/download-user-file', () => {
     it('returns an attachment file', async () => {
       const fileId = generateFileId();
       const fileContent = 'content';
-      fs.writeFileSync(getPathForUserFile(fileId), fileContent);
+      await writeUserBlob(fileId, fileContent);
       getAccountDb().mutate(
         'INSERT INTO files (id, deleted) VALUES (?, FALSE)',
         [fileId],
@@ -909,17 +928,10 @@ describe('/download-user-file', () => {
     describe('access control', () => {
       it('returns 403 when non-owner downloads another user file', async () => {
         const fileId = generateFileId();
-        const fileContent = 'sensitive content';
-        fs.writeFileSync(getPathForUserFile(fileId), fileContent);
         getAccountDb().mutate(
           'INSERT INTO files (id, deleted, owner) VALUES (?, FALSE, ?)',
           [fileId, OTHER_USER_ID],
         );
-        onTestFinished(() => {
-          try {
-            fs.unlinkSync(getPathForUserFile(fileId));
-          } catch {}
-        });
 
         const res = await request(app)
           .get('/download-user-file')
@@ -933,16 +945,12 @@ describe('/download-user-file', () => {
       it("allows an admin to download another user's file", async () => {
         const fileId = generateFileId();
         const fileContent = 'admin-downloaded content';
-        fs.writeFileSync(getPathForUserFile(fileId), fileContent);
+        await writeUserBlob(fileId, fileContent);
         getAccountDb().mutate(
           'INSERT INTO files (id, deleted, owner) VALUES (?, FALSE, ?)',
           [fileId, OTHER_USER_ID],
         );
-        onTestFinished(() => {
-          try {
-            fs.unlinkSync(getPathForUserFile(fileId));
-          } catch {}
-        });
+        cleanupUserBlob(fileId);
 
         const res = await request(app)
           .get('/download-user-file')
@@ -959,7 +967,7 @@ describe('/download-user-file', () => {
         // This exercises the requireFileAccess branch that uses UserService.countUserAccess.
         const fileId = generateFileId();
         const fileContent = 'shared-user content';
-        fs.writeFileSync(getPathForUserFile(fileId), fileContent);
+        await writeUserBlob(fileId, fileContent);
         getAccountDb().mutate(
           'INSERT INTO files (id, deleted, owner) VALUES (?, FALSE, ?)',
           [fileId, OTHER_USER_ID],
@@ -968,11 +976,7 @@ describe('/download-user-file', () => {
           'INSERT INTO user_access (file_id, user_id) VALUES (?, ?)',
           [fileId, 'genericUser'],
         );
-        onTestFinished(() => {
-          try {
-            fs.unlinkSync(getPathForUserFile(fileId));
-          } catch {}
-        });
+        cleanupUserBlob(fileId);
 
         const res = await request(app)
           .get('/download-user-file')

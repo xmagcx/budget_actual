@@ -9,18 +9,37 @@ import {
   setPasswordHash,
   verifyPassword,
 } from './accounts/password';
-import { openDatabase } from './db';
+import { openDatabase, openTursoDatabase, wrapDatabaseAsync } from './db';
 import { config } from './load-config';
+import { getTursoClient } from './storage/turso-client';
 
 let _accountDb;
+let _accountDbAsync;
+
+function getAccountDbPath() {
+  return join(resolve(config.get('serverFiles')), 'account.sqlite');
+}
 
 export function getAccountDb() {
   if (_accountDb === undefined) {
-    const dbPath = join(resolve(config.get('serverFiles')), 'account.sqlite');
-    _accountDb = openDatabase(dbPath);
+    _accountDb = openDatabase(getAccountDbPath());
   }
 
   return _accountDb;
+}
+
+function isTursoAccountDbEnabled() {
+  return process.env.ACTUAL_ACCOUNT_DB_BACKEND === 'turso';
+}
+
+export async function getAccountDbAsync() {
+  if (_accountDbAsync === undefined) {
+    _accountDbAsync = isTursoAccountDbEnabled()
+      ? openTursoDatabase(getTursoClient())
+      : wrapDatabaseAsync(getAccountDb());
+  }
+
+  return _accountDbAsync;
 }
 
 export function needsBootstrap() {
@@ -154,6 +173,14 @@ export function hasPermission(userId, permission) {
   return getUserPermission(userId) === permission;
 }
 
+export async function isAdminAsync(userId) {
+  return hasPermissionAsync(userId, 'ADMIN');
+}
+
+export async function hasPermissionAsync(userId, permission) {
+  return (await getUserPermissionAsync(userId)) === permission;
+}
+
 export async function enableOpenID(loginSettings) {
   if (!loginSettings || !loginSettings.openId) {
     return { error: 'invalid-login-settings' };
@@ -245,6 +272,18 @@ export function getUserPermission(userId) {
           WHERE users.id = ?`,
     [userId],
   ) || { role: '' };
+
+  return role;
+}
+
+export async function getUserPermissionAsync(userId) {
+  const accountDb = await getAccountDbAsync();
+  const { role } =
+    (await accountDb.first(
+      `SELECT role FROM users
+          WHERE users.id = ?`,
+      [userId],
+    )) || { role: '' };
 
   return role;
 }

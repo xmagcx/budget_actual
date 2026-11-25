@@ -1,5 +1,10 @@
 // @ts-strict-ignore
-import { getAccountDb, isAdmin } from '#account-db';
+import {
+  getAccountDb,
+  getAccountDbAsync,
+  isAdmin,
+  isAdminAsync,
+} from '#account-db';
 
 export function getUserByUsername(userName) {
   if (!userName || typeof userName !== 'string') {
@@ -166,6 +171,19 @@ export function canAccessActiveFile(fileId: string, userId: string): boolean {
   return !!file && (isAdmin(userId) || countUserAccess(fileId, userId) > 0);
 }
 
+export async function canAccessActiveFileAsync(
+  fileId: string,
+  userId: string,
+): Promise<boolean> {
+  const file = await (await getAccountDbAsync()).first(
+    'SELECT id FROM files WHERE id = ? AND deleted = 0',
+    [fileId],
+  );
+  return (
+    !!file && ((await isAdminAsync(userId)) || (await countUserAccessAsync(fileId, userId)) > 0)
+  );
+}
+
 export function revokeApiKeysWithoutBudgetAccess() {
   const db = getAccountDb();
   const keys: { id: string; user_id: string }[] = db.all(
@@ -195,6 +213,21 @@ export function countUserAccess(fileId, userId) {
        )`,
       [fileId, userId, userId, fileId],
     ) || {};
+
+  return accessCount || 0;
+}
+
+export async function countUserAccessAsync(fileId, userId): Promise<number> {
+  const { accessCount } =
+    (await (await getAccountDbAsync()).first(
+      `SELECT COUNT(*) as accessCount
+       FROM files
+       WHERE files.id = ? AND (files.owner = ? OR EXISTS (
+         SELECT 1 FROM user_access
+         WHERE user_access.user_id = ? AND user_access.file_id = ?)
+       )`,
+      [fileId, userId, userId, fileId],
+    )) || {};
 
   return accessCount || 0;
 }

@@ -87,6 +87,63 @@ The server will put all the budget files in this directory as binary blobs. If n
 
 See the `ACTUAL_DATA_DIR` section above to override the data folder location.
 
+## `ACTUAL_STORAGE_BACKEND`
+
+Selects the storage backend used by the sync-server runtime.
+
+- `local` (default): current filesystem + local SQLite behavior.
+- `turso`: enables Turso-backed group sync and blob storage paths.
+
+Set with `ACTUAL_STORAGE_BACKEND=turso`.
+
+:::caution
+`ACTUAL_STORAGE_BACKEND=turso` does **not** currently migrate every server table to Turso. Account metadata and other server data still rely on the existing server database path unless explicitly migrated.
+:::
+
+## `ACTUAL_TURSO_ENV`
+
+Selects which Turso credentials to use when `ACTUAL_STORAGE_BACKEND=turso`.
+
+- `prd` (default)
+- `dev`
+
+If not set, the server defaults to `prd`.
+
+## `ACTUAL_TURSO_PRD_URL` and `ACTUAL_TURSO_PRD_AUTH_TOKEN`
+
+Production Turso connection values used when `ACTUAL_TURSO_ENV=prd`.
+
+## `ACTUAL_TURSO_DEV_URL` and `ACTUAL_TURSO_DEV_AUTH_TOKEN`
+
+Development Turso connection values used when `ACTUAL_TURSO_ENV=dev`.
+
+## `ACTUAL_TURSO_URL` and `ACTUAL_TURSO_AUTH_TOKEN` (legacy override)
+
+If `ACTUAL_TURSO_URL` is set, it takes precedence over `ACTUAL_TURSO_ENV` + `*_PRD_*`/`*_DEV_*` variables.
+
+Example with environment split:
+
+```bash
+ACTUAL_STORAGE_BACKEND=turso
+ACTUAL_TURSO_ENV=prd
+ACTUAL_TURSO_PRD_URL=libsql://your-prod-db.turso.io
+ACTUAL_TURSO_PRD_AUTH_TOKEN=your-prod-token
+ACTUAL_TURSO_DEV_URL=libsql://your-dev-db.turso.io
+ACTUAL_TURSO_DEV_AUTH_TOKEN=your-dev-token
+```
+
+Example with legacy single connection:
+
+```bash
+ACTUAL_STORAGE_BACKEND=turso
+ACTUAL_TURSO_URL=libsql://your-db-name-your-org.turso.io
+ACTUAL_TURSO_AUTH_TOKEN=your-token
+```
+
+## `ACTUAL_DISABLE_FRONTEND`
+
+Set `ACTUAL_DISABLE_FRONTEND=true` to disable serving the web frontend from the sync-server process (API-only mode). This is useful in environments where frontend hosting is handled separately.
+
 ## `webRoot`
 
 (Advanced, most people will not need to configure this.) The server will serve the frontend from this directory. If not specified, the server will use the files in the `@actual-app/web` package that it has installed. (environment variable: `ACTUAL_WEB_ROOT`)

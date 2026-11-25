@@ -142,16 +142,16 @@ class FilesService {
     this.accountDb = accountDb;
   }
 
-  get(fileId: FileId) {
-    const rawFile = this.getRaw(fileId);
+  get(fileId: FileId): Promise<File> {
+    const rawFile = this.getRawSync(fileId);
     if (!rawFile || (rawFile && rawFile.deleted)) {
       throw new FileNotFound();
     }
 
-    return this.validate(rawFile);
+    return Promise.resolve(this.validate(rawFile));
   }
 
-  set(file: File) {
+  set(file: File): Promise<void> {
     const deletedInt = boolToInt(file.deleted);
     this.accountDb.mutate(
       'INSERT INTO files (id, group_id, sync_version, name, encrypt_meta, encrypt_salt, encrypt_test, encrypt_keyid, deleted, owner) VALUES (?, ?, ?, ?, ?, ?, ?, ? ,?, ?)',
@@ -168,19 +168,21 @@ class FilesService {
         file.owner,
       ],
     );
+    return Promise.resolve();
   }
 
-  find({ userId, limit = 1000 }: { userId: string; limit?: number }) {
+  find({ userId, limit = 1000 }: { userId: string; limit?: number }): Promise<File[]> {
     const canSeeAll = isAdmin(userId);
 
-    return (
-      canSeeAll
-        ? this.accountDb.all<RawFile>(
-            'SELECT * FROM files WHERE deleted = 0 LIMIT ?',
-            [limit],
-          )
-        : this.accountDb.all<RawFile>(
-            `SELECT files.*
+    return Promise.resolve(
+      (
+        canSeeAll
+          ? this.accountDb.all<RawFile>(
+              'SELECT * FROM files WHERE deleted = 0 LIMIT ?',
+              [limit],
+            )
+          : this.accountDb.all<RawFile>(
+              `SELECT files.*
         FROM files
         WHERE files.owner = ? and deleted = 0
       UNION
@@ -190,12 +192,13 @@ class FilesService {
           ON user_access.file_id = files.id
           AND user_access.user_id = ?
        WHERE files.deleted = 0 LIMIT ?`,
-            [userId, userId, limit],
-          )
-    ).map(item => this.validate(item));
+              [userId, userId, limit],
+            )
+      ).map(item => this.validate(item)),
+    );
   }
 
-  findUsersWithAccess(fileId: FileId) {
+  findUsersWithAccess(fileId: FileId): Promise<UserWithAccess[]> {
     const userAccess =
       this.accountDb.all<UserWithAccess>(
         `SELECT UA.user_id as userId, users.display_name displayName, users.user_name userName
@@ -212,10 +215,10 @@ class FilesService {
         [fileId, fileId],
       ) || [];
 
-    return userAccess;
+    return Promise.resolve(userAccess);
   }
 
-  update(id: FileId, fileUpdate: Partial<File>) {
+  update(id: FileId, fileUpdate: Partial<File>): Promise<File> {
     let query = 'UPDATE files SET';
     const params = [];
     const updates = [];
@@ -265,14 +268,18 @@ class FilesService {
     }
 
     // Return the modified object
-    const rawFile = this.getRaw(id);
+    const rawFile = this.getRawSync(id);
     if (!rawFile) {
       throw new GenericFileError('File not found', { id });
     }
-    return this.validate(rawFile);
+    return Promise.resolve(this.validate(rawFile));
   }
 
-  getRaw(fileId: FileId): RawFile | null {
+  getRaw(fileId: FileId): Promise<RawFile | null> {
+    return Promise.resolve(this.getRawSync(fileId));
+  }
+
+  private getRawSync(fileId: FileId): RawFile | null {
     return this.accountDb.first(`SELECT * FROM files WHERE id = ?`, [fileId]);
   }
 

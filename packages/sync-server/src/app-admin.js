@@ -222,7 +222,7 @@ app.get('/access', validateSessionMiddleware, (req, res) => {
   res.json(accesses);
 });
 
-app.post('/access', (req, res) => {
+app.post('/access', async (req, res) => {
   const userAccess = req.body || {};
   const session = validateSession(req, res);
 
@@ -263,7 +263,10 @@ app.post('/access', (req, res) => {
     return;
   }
 
-  if (UserService.countUserAccess(userAccess.fileId, userAccess.userId) > 0) {
+  if (
+    (await UserService.countUserAccessAsync(userAccess.fileId, userAccess.userId)) >
+    0
+  ) {
     res.status(400).send({
       status: 'error',
       reason: 'user-already-have-access',

@@ -46,8 +46,8 @@ describe('FilesService', () => {
     clearDatabase();
   });
 
-  test('get should return a file', () => {
-    const file = filesService.get('1');
+  test('get should return a file', async () => {
+    const file = await filesService.get('1');
     const expectedFile = new File({
       id: '1',
       groupId: 'group1',
@@ -61,6 +61,25 @@ describe('FilesService', () => {
     });
 
     expect(file).toEqual(expectedFile);
+  });
+
+  test('db-facing API methods should be promise-based', () => {
+    const fileId = crypto.randomBytes(16).toString('hex');
+    const newFile = new File({
+      id: fileId,
+      groupId: 'group2',
+      syncVersion: 1,
+      name: 'file2',
+      encryptMeta: '{"key":"value2"}',
+      deleted: false,
+    });
+
+    expect(filesService.get('1')).toBeInstanceOf(Promise);
+    expect(filesService.set(newFile)).toBeInstanceOf(Promise);
+    expect(filesService.find({ userId: 'genericAdmin' })).toBeInstanceOf(Promise);
+    expect(filesService.findUsersWithAccess('1')).toBeInstanceOf(Promise);
+    expect(filesService.update('1', new FileUpdate({ name: 'updatedFile1' }))).toBeInstanceOf(Promise);
+    expect(filesService.getRaw('1')).toBeInstanceOf(Promise);
   });
 
   test('get should throw FileNotFound if file is deleted or does not exist', () => {
@@ -91,7 +110,7 @@ describe('FilesService', () => {
 
   test.each([true, false])(
     'set should insert a new file with deleted: %p',
-    deleted => {
+    async deleted => {
       const fileId = crypto.randomBytes(16).toString('hex');
       const newFile = new File({
         id: fileId,
@@ -102,9 +121,9 @@ describe('FilesService', () => {
         deleted,
       });
 
-      filesService.set(newFile);
+      await filesService.set(newFile);
 
-      const file = filesService.validate(filesService.getRaw(fileId));
+      const file = filesService.validate(await filesService.getRaw(fileId));
       const expectedFile = new File({
         id: fileId,
         groupId: 'group2',
@@ -121,8 +140,8 @@ describe('FilesService', () => {
     },
   );
 
-  test('find should return a list of files', () => {
-    const files = filesService.find({ userId: 'genericAdmin' });
+  test('find should return a list of files', async () => {
+    const files = await filesService.find({ userId: 'genericAdmin' });
     expect(files.length).toBe(1);
     expect(files[0]).toEqual(
       new File({
@@ -139,8 +158,8 @@ describe('FilesService', () => {
     );
   });
 
-  test('find should respect the limit parameter', () => {
-    filesService.set(
+  test('find should respect the limit parameter', async () => {
+    await filesService.set(
       new File({
         id: crypto.randomBytes(16).toString('hex'),
         groupId: 'group2',
@@ -151,18 +170,18 @@ describe('FilesService', () => {
       }),
     );
     // Make sure that the file was inserted
-    const allFiles = filesService.find({ userId: 'genericAdmin' });
+    const allFiles = await filesService.find({ userId: 'genericAdmin' });
     expect(allFiles.length).toBe(2);
 
     // Limit the number of files returned
-    const limitedFiles = filesService.find({
+    const limitedFiles = await filesService.find({
       userId: 'genericAdmin',
       limit: 1,
     });
     expect(limitedFiles.length).toBe(1);
   });
 
-  test('update should modify all attributes of an existing file', () => {
+  test('update should modify all attributes of an existing file', async () => {
     const fileUpdate = new FileUpdate({
       name: 'updatedFile1',
       groupId: 'updatedGroup1',
@@ -173,7 +192,7 @@ describe('FilesService', () => {
       syncVersion: 2,
       deleted: true,
     });
-    const updatedFile = filesService.update('1', fileUpdate);
+    const updatedFile = await filesService.update('1', fileUpdate);
 
     expect(updatedFile).toEqual(
       new File({
@@ -190,8 +209,8 @@ describe('FilesService', () => {
     );
   });
 
-  test('find should return only files accessible to the user', () => {
-    filesService.set(
+  test('find should return only files accessible to the user', async () => {
+    await filesService.set(
       new File({
         id: crypto.randomBytes(16).toString('hex'),
         groupId: 'group2',
@@ -203,7 +222,7 @@ describe('FilesService', () => {
       }),
     );
 
-    filesService.set(
+    await filesService.set(
       new File({
         id: crypto.randomBytes(16).toString('hex'),
         groupId: 'group2',
@@ -215,19 +234,19 @@ describe('FilesService', () => {
       }),
     );
 
-    expect(filesService.find({ userId: 'genericUser' })).toHaveLength(1);
+    expect(await filesService.find({ userId: 'genericUser' })).toHaveLength(1);
     expect(
-      filesService.find({ userId: 'genericAdmin' }).length,
+      (await filesService.find({ userId: 'genericAdmin' })).length,
     ).toBeGreaterThan(1);
   });
 
   test.each([['update-group', null]])(
     'update should modify a single attribute with groupId = $groupId',
-    newGroupId => {
+    async newGroupId => {
       const fileUpdate = new FileUpdate({
         groupId: newGroupId,
       });
-      const updatedFile = filesService.update('1', fileUpdate);
+      const updatedFile = await filesService.update('1', fileUpdate);
 
       expect(updatedFile).toEqual(
         new File({

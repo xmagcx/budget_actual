@@ -1,7 +1,5 @@
 // @ts-strict-ignore
 import { Buffer } from 'node:buffer';
-import fs from 'node:fs/promises';
-import { resolve } from 'node:path';
 
 import {
   create,
@@ -28,24 +26,19 @@ import {
 import { config } from './load-config';
 import { SecretName, secretsService } from './services/secrets-service';
 import * as UserService from './services/user-service';
-import * as simpleSync from './sync-simple';
-import { atomicWriteFile } from './util/atomic-write';
 import {
   errorMiddleware,
   requestLoggerMiddleware,
   validateSessionMiddleware,
 } from './util/middlewares';
-import {
-  getPathForGroupFile,
-  getPathForUserFile,
-  isValidFileId,
-  isValidGroupId,
-} from './util/paths';
+import { isValidFileId, isValidGroupId } from './util/paths';
+import { getGroupSyncStore } from './storage/group-sync-store';
+import { getUserBlobStore } from './storage/user-blob-store';
 import type { GroupId } from './util/paths';
 import { validateBudgetSession } from './util/validate-budget-session';
 
 const app = express();
-app.use((req, res, next) => {
+app.use(async (req, res, next) => {
   const supportsApiKey =
     (req.method === 'GET' &&
       [
@@ -57,7 +50,7 @@ app.use((req, res, next) => {
   if (!supportsApiKey) {
     return validateSessionMiddleware(req, res, next);
   }
-  const session = validateBudgetSession(req, res);
+  const session = await validateBudgetSession(req, res);
   if (session) {
     res.locals = session;
     next();
@@ -111,7 +104,7 @@ function extractSingleHeader(
   return value;
 }
 
-const verifyFileExists = (
+const verifyFileExists = async (
   fileId: unknown,
   filesService: FilesService,
   res: Response,
@@ -127,7 +120,7 @@ const verifyFileExists = (
   }
 
   try {
-    return filesService.get(fileId);
+    return await filesService.get(fileId);
   } catch (e) {
     if (e instanceof FileNotFound) {
       //FIXME: error code should be 404. Need to make sure frontend is ok with it.
@@ -149,11 +142,11 @@ function requireFileOwner(file: File, userId: string) {
   return 'file-access-not-allowed';
 }
 
-function requireFileAccess(file: File, userId: string) {
+async function requireFileAccess(file: File, userId: string) {
   if (requireFileOwner(file, userId) === null) {
     return null;
   }
-  if (UserService.countUserAccess(file.id, userId) > 0) {
+  if ((await UserService.countUserAccessAsync(file.id, userId)) > 0) {
     return null;
   }
   return 'file-access-not-allowed';
@@ -187,7 +180,7 @@ app.post('/sync', async (req, res): Promise<void> => {
 
   const filesService = new FilesService(getAccountDb());
 
-  const currentFile = verifyFileExists(
+  const currentFile = await verifyFileExists(
     fileId,
     filesService,
     res,
@@ -198,7 +191,7 @@ app.post('/sync', async (req, res): Promise<void> => {
     return;
   }
 
-  const fileAccessError = requireFileAccess(currentFile, res.locals.user_id);
+  const fileAccessError = await requireFileAccess(currentFile, res.locals.user_id);
   if (fileAccessError) {
     res.status(403);
     res.send(fileAccessError);
@@ -212,7 +205,7 @@ app.post('/sync', async (req, res): Promise<void> => {
     return;
   }
 
-  const result = simpleSync.sync(messages, since, groupId);
+  const result = await getGroupSyncStore().sync(messages, since, groupId);
   if (result.error) {
     res.status(400).send(result.error);
     return;
@@ -229,19 +222,24 @@ app.post('/sync', async (req, res): Promise<void> => {
   res.send(Buffer.from(toBinary(SyncResponseSchema, responsePb)));
 });
 
-app.post('/user-get-key', (req, res) => {
+app.post('/user-get-key', async (req, res) => {
   if (!res.locals) return;
 
   const { fileId } = req.body || {};
 
   const filesService = new FilesService(getAccountDb());
-  const file = verifyFileExists(fileId, filesService, res, 'file-not-found');
+  const file = await verifyFileExists(
+    fileId,
+    filesService,
+    res,
+    'file-not-found',
+  );
 
   if (!file) {
     return;
   }
 
-  const fileAccessError = requireFileAccess(file, res.locals.user_id);
+  const fileAccessError = await requireFileAccess(file, res.locals.user_id);
   if (fileAccessError) {
     res.status(403);
     res.send(fileAccessError);
@@ -258,11 +256,16 @@ app.post('/user-get-key', (req, res) => {
   });
 });
 
-app.post('/user-create-key', (req, res) => {
+app.post('/user-create-key', async (req, res) => {
   const { fileId, keyId, keySalt, testContent } = req.body || {};
 
   const filesService = new FilesService(getAccountDb());
-  const file = verifyFileExists(fileId, filesService, res, 'file-not-found');
+  const file = await verifyFileExists(
+    fileId,
+    filesService,
+    res,
+    'file-not-found',
+  );
 
   if (!file) {
     return;
@@ -275,7 +278,7 @@ app.post('/user-create-key', (req, res) => {
     return;
   }
 
-  filesService.update(
+  await filesService.update(
     file.id,
     new FileUpdate({
       encryptSalt: keySalt,
@@ -291,7 +294,7 @@ app.post('/reset-user-file', async (req, res) => {
   const { fileId } = req.body || {};
 
   const filesService = new FilesService(getAccountDb());
-  const file = verifyFileExists(
+  const file = await verifyFileExists(
     fileId,
     filesService,
     res,
@@ -311,11 +314,11 @@ app.post('/reset-user-file', async (req, res) => {
 
   const groupId = file.groupId;
 
-  filesService.update(file.id, new FileUpdate({ groupId: null }));
+  await filesService.update(file.id, new FileUpdate({ groupId: null }));
 
   if (groupId) {
     try {
-      await fs.unlink(getPathForGroupFile(groupId));
+      await getGroupSyncStore().reset(groupId);
     } catch {
       console.log(`Unable to delete sync data for group "${groupId}"`);
     }
@@ -368,7 +371,7 @@ app.post('/upload-user-file', async (req, res) => {
   let currentFile;
 
   try {
-    currentFile = filesService.get(fileId);
+    currentFile = await filesService.get(fileId);
   } catch (e) {
     if (e instanceof FileNotFound) {
       currentFile = null;
@@ -378,7 +381,7 @@ app.post('/upload-user-file', async (req, res) => {
   }
 
   const fileAccessError = currentFile
-    ? requireFileAccess(currentFile, res.locals.user_id)
+    ? await requireFileAccess(currentFile, res.locals.user_id)
     : null;
   if (fileAccessError) {
     res.status(403);
@@ -393,7 +396,7 @@ app.post('/upload-user-file', async (req, res) => {
   }
 
   try {
-    await atomicWriteFile(getPathForUserFile(fileId), req.body);
+    await getUserBlobStore().write(fileId, Buffer.from(req.body));
   } catch (err) {
     console.log('Error writing file', err);
     res.status(500).send({ status: 'error' });
@@ -404,7 +407,7 @@ app.post('/upload-user-file', async (req, res) => {
     // it's new
     const newGroupId = generateGroupId();
     groupId = newGroupId;
-    filesService.set(
+    await filesService.set(
       new File({
         id: fileId,
         groupId: newGroupId,
@@ -427,11 +430,11 @@ app.post('/upload-user-file', async (req, res) => {
     // sync state was reset, create new group
     const newGroupId = generateGroupId();
     groupId = newGroupId;
-    filesService.update(fileId, new FileUpdate({ groupId: newGroupId }));
+    await filesService.update(fileId, new FileUpdate({ groupId: newGroupId }));
   }
 
   // Regardless, update some properties
-  filesService.update(
+  await filesService.update(
     fileId,
     new FileUpdate({
       syncVersion: syncFormatVersion,
@@ -457,7 +460,7 @@ app.get('/download-user-file', async (req, res) => {
   }
 
   const filesService = new FilesService(getAccountDb());
-  const file = verifyFileExists(
+  const file = await verifyFileExists(
     fileId,
     filesService,
     res,
@@ -468,72 +471,76 @@ app.get('/download-user-file', async (req, res) => {
     return;
   }
 
-  const fileAccessError = requireFileAccess(file, res.locals.user_id);
+  const fileAccessError = await requireFileAccess(file, res.locals.user_id);
   if (fileAccessError) {
     res.status(403);
     res.send(fileAccessError);
     return;
   }
 
-  const path = getPathForUserFile(fileId);
-
-  if (!path.startsWith(resolve(config.get('userFiles')))) {
-    //Ensure the user doesn't try to access files outside of the user files directory
-    res.status(403).send('Access denied');
-    return;
+  try {
+    const blob = await getUserBlobStore().read(fileId);
+    res.setHeader('Content-Disposition', `attachment;filename=${fileId}`);
+    res.send(blob);
+  } catch {
+    res.status(404).send('file-not-found');
   }
-
-  res.setHeader('Content-Disposition', `attachment;filename=${fileId}`);
-  res.sendFile(path, { dotfiles: 'allow' });
 });
 
-app.post('/update-user-filename', (req, res) => {
+app.post('/update-user-filename', async (req, res) => {
   const { fileId, name } = req.body || {};
 
   const filesService = new FilesService(getAccountDb());
-  const file = verifyFileExists(fileId, filesService, res, 'file-not-found');
+  const file = await verifyFileExists(
+    fileId,
+    filesService,
+    res,
+    'file-not-found',
+  );
 
   if (!file) {
     return;
   }
 
-  const fileAccessError = requireFileAccess(file, res.locals.user_id);
+  const fileAccessError = await requireFileAccess(file, res.locals.user_id);
   if (fileAccessError) {
     res.status(403);
     res.send(fileAccessError);
     return;
   }
 
-  filesService.update(file.id, new FileUpdate({ name }));
+  await filesService.update(file.id, new FileUpdate({ name }));
   res.send(OK_RESPONSE);
 });
 
-app.get('/list-user-files', (req, res) => {
+app.get('/list-user-files', async (_req, res) => {
   const fileService = new FilesService(getAccountDb());
-  const rows = fileService
-    .find({ userId: res.locals.user_id })
-    .filter(
-      row =>
-        !res.locals.apiKeyFileIds || res.locals.apiKeyFileIds.includes(row.id),
-    );
+  const rows = (await fileService.find({ userId: res.locals.user_id })).filter(
+    row =>
+      !res.locals.apiKeyFileIds || res.locals.apiKeyFileIds.includes(row.id),
+  );
   res.send({
     status: 'ok',
-    data: rows.map(row => ({
-      deleted: boolToInt(row.deleted),
-      fileId: row.id,
-      groupId: row.groupId,
-      name: row.name,
-      encryptKeyId: row.encryptKeyId,
-      owner: row.owner,
-      usersWithAccess: fileService.findUsersWithAccess(row.id).map(access => ({
-        ...access,
-        owner: access.userId === row.owner,
+    data: await Promise.all(
+      rows.map(async row => ({
+        deleted: boolToInt(row.deleted),
+        fileId: row.id,
+        groupId: row.groupId,
+        name: row.name,
+        encryptKeyId: row.encryptKeyId,
+        owner: row.owner,
+        usersWithAccess: (await fileService.findUsersWithAccess(row.id)).map(
+          access => ({
+            ...access,
+            owner: access.userId === row.owner,
+          }),
+        ),
       })),
-    })),
+    ),
   });
 });
 
-app.get('/get-user-file-info', (req, res) => {
+app.get('/get-user-file-info', async (req, res) => {
   const fileId = req.headers['x-actual-file-id'];
 
   // TODO: Return 422 if fileId is not provided. Need to make sure frontend can handle it
@@ -547,7 +554,7 @@ app.get('/get-user-file-info', (req, res) => {
 
   const fileService = new FilesService(getAccountDb());
 
-  const file = verifyFileExists(fileId, fileService, res, {
+  const file = await verifyFileExists(fileId, fileService, res, {
     status: 'error',
     reason: 'file-not-found',
   });
@@ -556,7 +563,7 @@ app.get('/get-user-file-info', (req, res) => {
     return;
   }
 
-  const fileAccessError = requireFileAccess(file, res.locals.user_id);
+  const fileAccessError = await requireFileAccess(file, res.locals.user_id);
   if (fileAccessError) {
     res.status(403);
     res.send(fileAccessError);
@@ -571,15 +578,17 @@ app.get('/get-user-file-info', (req, res) => {
       groupId: file.groupId,
       name: file.name,
       encryptMeta: file.encryptMeta ? JSON.parse(file.encryptMeta) : null,
-      usersWithAccess: fileService.findUsersWithAccess(file.id).map(access => ({
-        ...access,
-        owner: access.userId === file.owner,
-      })),
+      usersWithAccess: (await fileService.findUsersWithAccess(file.id)).map(
+        access => ({
+          ...access,
+          owner: access.userId === file.owner,
+        }),
+      ),
     },
   });
 });
 
-app.post('/delete-user-file', (req, res) => {
+app.post('/delete-user-file', async (req, res) => {
   const { fileId } = req.body || {};
 
   if (!fileId) {
@@ -593,7 +602,12 @@ app.post('/delete-user-file', (req, res) => {
 
   const accountDb = getAccountDb();
   const filesService = new FilesService(accountDb);
-  const file = verifyFileExists(fileId, filesService, res, 'file-not-found');
+  const file = await verifyFileExists(
+    fileId,
+    filesService,
+    res,
+    'file-not-found',
+  );
   if (!file) {
     return;
   }
@@ -606,7 +620,7 @@ app.post('/delete-user-file', (req, res) => {
   }
 
   accountDb.transaction(() => {
-    filesService.update(file.id, new FileUpdate({ deleted: true }));
+    void filesService.update(file.id, new FileUpdate({ deleted: true }));
     UserService.revokeApiKeysWithoutBudgetAccess();
     for (const name of Object.values(SecretName)) {
       secretsService.reset(name, file.id);

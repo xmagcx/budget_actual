@@ -41,14 +41,14 @@ budgetAccounts.use(validateBankSyncSession());
 app.use(bankSync, budgetAccounts);
 app.use(validateSessionMiddleware);
 
-function selectCredentials(req, res, next) {
+async function selectCredentials(req, res, next) {
   const fileId = req.get('X-Actual-File-Id');
   if (fileId != null) {
     if (!isValidFileId(fileId)) {
       res.status(400).send({ status: 'error', reason: 'invalid-file-id' });
       return;
     }
-    if (!UserService.canAccessActiveFile(fileId, res.locals.user_id)) {
+    if (!(await UserService.canAccessActiveFileAsync(fileId, res.locals.user_id))) {
       res.status(403).send({ status: 'error', reason: 'file-access-denied' });
       return;
     }
@@ -76,15 +76,18 @@ bankSync.post(
     );
     const configured = token != null && !isForbidden(token);
 
+    let source = null;
+    if (res.locals.credentialFileId) {
+      source = 'per-budget-file';
+    } else if (configured) {
+      source = 'global';
+    }
+
     res.send({
       status: 'ok',
       data: {
         configured,
-        source: res.locals.credentialFileId
-          ? 'per-budget-file'
-          : configured
-            ? 'global'
-            : null,
+        source,
       },
     });
   }),
@@ -111,7 +114,7 @@ budgetAccounts.post(
 
       const claimUrl = decodeClaimUrl(token);
       if (claimUrl == null) {
-        console.log(
+        debugSensitive(
           'SimpleFIN setup token does not decode to a claim URL - re-enter the token',
         );
         invalidToken(res);
@@ -121,7 +124,7 @@ budgetAccounts.post(
       try {
         accessKey = await claimAccessKey(claimUrl);
       } catch (e) {
-        console.log('Failed to claim the SimpleFIN setup token:');
+        debugSensitive('Failed to claim the SimpleFIN setup token');
         serverDown(e, res);
         return;
       }
@@ -186,9 +189,10 @@ bankSync.post(
       throw new Error('accountId and startDate arrays must be the same length');
     }
 
-    const earliestStartDate = Array.isArray(startDate)
-      ? startDate.reduce((a, b) => (a < b ? a : b))
-      : startDate;
+    let earliestStartDate = startDate;
+    if (Array.isArray(startDate)) {
+      earliestStartDate = startDate.reduce((a, b) => (a < b ? a : b));
+    }
     let results;
     try {
       results = await getTransactions(

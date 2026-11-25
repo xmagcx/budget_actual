@@ -123,3 +123,22 @@ actual.config.js
 
 # Mac App Store provisioning profiles, downloaded per machine
 packages/desktop-electron/mas/*.provisionprofile
+# Local Pi runtime state
+.atl/
+
+# Local environment files
+.env
+.env.*
+!.env.example
+.claude/
+.codegra    
+
+# IA external folders
+.atl/
+.claude/
+.codegraph/
+.codex/
+.cursor/
+.pi/
+.serena/
+.agents/

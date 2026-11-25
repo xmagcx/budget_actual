@@ -211,8 +211,8 @@ app.post('/server-prefs', (req, res) => {
   res.send({ status: 'ok', data: {} });
 });
 
-app.get('/validate', (req, res) => {
-  const session = validateBudgetSession(req, res);
+app.get('/validate', async (req, res) => {
+  const session = await validateBudgetSession(req, res);
   if (session?.apiKeyFileIds) {
     res.send({
       status: 'ok',

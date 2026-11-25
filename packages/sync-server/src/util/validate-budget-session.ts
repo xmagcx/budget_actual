@@ -3,13 +3,13 @@ import { createHash } from 'node:crypto';
 import type { NextFunction, Request, Response } from 'express';
 
 import { getAccountDb } from '#account-db';
-import { canAccessActiveFile } from '#services/user-service';
+import { canAccessActiveFileAsync } from '#services/user-service';
 
 import { validateSession } from './validate-user';
 
 // Only call this on endpoints that explicitly support budget-scoped keys.
 // All other endpoints must continue to require an ordinary session.
-export function validateBudgetSession(req: Request, res: Response) {
+export async function validateBudgetSession(req: Request, res: Response) {
   const token = req.body?.token || req.headers['x-actual-token'];
   if (typeof token !== 'string' || !token.startsWith('actual_')) {
     return validateSession(req, res);
@@ -34,9 +34,11 @@ export function validateBudgetSession(req: Request, res: Response) {
     'SELECT file_id FROM api_key_budgets WHERE key_id = ?',
     [key.id],
   );
-  const apiKeyFileIds = budgets
-    .map(budget => budget.file_id)
-    .filter(fileId => canAccessActiveFile(fileId, key.user_id));
+  const budgetFileIds = budgets.map(budget => budget.file_id);
+  const accessFlags = await Promise.all(
+    budgetFileIds.map(fileId => canAccessActiveFileAsync(fileId, key.user_id)),
+  );
+  const apiKeyFileIds = budgetFileIds.filter((_, index) => accessFlags[index]);
 
   if (apiKeyFileIds.length === 0) {
     res.status(401).send({ status: 'error', reason: 'unauthorized' });
@@ -54,8 +56,8 @@ export function validateBudgetSession(req: Request, res: Response) {
 export function validateBankSyncSession({
   allowGlobalCredentials = false,
 } = {}) {
-  return (req: Request, res: Response, next: NextFunction) => {
-    const session = validateBudgetSession(req, res);
+  return async (req: Request, res: Response, next: NextFunction) => {
+    const session = await validateBudgetSession(req, res);
     if (!session) return;
     if (
       'apiKeyFileIds' in session &&
@@ -75,12 +77,12 @@ export function validateBankSyncSession({
 }
 
 // Setup and connection management continue to require an ordinary session.
-export function validateGlobalBankSyncSession(
+export async function validateGlobalBankSyncSession(
   req: Request,
   res: Response,
   next: NextFunction,
 ) {
-  const session = validateBudgetSession(req, res);
+  const session = await validateBudgetSession(req, res);
   if (!session) return;
   if ('apiKeyFileIds' in session && !session.allowGlobalBankSync) {
     res.status(403).send({ status: 'error', reason: 'permission-denied' });

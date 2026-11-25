@@ -46,7 +46,7 @@ bankSync.post(
         return;
       }
 
-      if (!UserService.canAccessActiveFile(fileId, res.locals.user_id)) {
+      if (!(await UserService.canAccessActiveFileAsync(fileId, res.locals.user_id))) {
         res.status(403).send({
           status: 'error',
           reason: 'file-access-denied',
@@ -85,7 +85,7 @@ budgetAccounts.post(
         return;
       }
 
-      if (!UserService.canAccessActiveFile(fileId, res.locals.user_id)) {
+      if (!(await UserService.canAccessActiveFileAsync(fileId, res.locals.user_id))) {
         res.status(403).send({
           status: 'error',
           reason: 'file-access-denied',
@@ -160,7 +160,7 @@ bankSync.post(
         return;
       }
 
-      if (!UserService.canAccessActiveFile(fileId, res.locals.user_id)) {
+      if (!(await UserService.canAccessActiveFileAsync(fileId, res.locals.user_id))) {
         res.status(403).send({
           status: 'error',
           reason: 'file-access-denied',

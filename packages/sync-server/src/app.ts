@@ -25,7 +25,7 @@ import { listen } from './util/server-listen';
 
 const debugSensitive = createDebug('actual-sensitive:server');
 
-const app = express();
+export const app = express();
 
 process.on('unhandledRejection', reason => {
   console.log('Unhandled rejection');
@@ -135,53 +135,58 @@ app.get('/metrics', (_req, res) => {
   });
 });
 
-// The web frontend.
-// Dev mode proxies to Vite, which injects inline preamble scripts and uses
-// a websocket for HMR. Loosen script-src and connect-src accordingly.
-// `'unsafe-eval'` is required at runtime for the Electron app, so it is
-// kept in both branches.
 const isDev = process.env.NODE_ENV === 'development';
-const scriptSrc = isDev
-  ? "'self' 'unsafe-inline' 'unsafe-eval' blob:"
-  : "'self' 'unsafe-eval' blob:";
-const connectSrc = isDev ? "'self' ws: wss: http: https:" : 'http: https:';
-const csp = [
-  "default-src 'self' blob:",
-  "img-src 'self' blob: data:",
-  `script-src ${scriptSrc}`,
-  "style-src 'self' 'unsafe-inline'",
-  "font-src 'self' data:",
-  `connect-src ${connectSrc}`,
-].join('; ');
+const shouldServeFrontend = process.env.ACTUAL_DISABLE_FRONTEND !== 'true';
 
-app.use((req, res, next) => {
-  res.set('Cross-Origin-Opener-Policy', 'same-origin');
-  res.set('Cross-Origin-Embedder-Policy', 'require-corp');
-  res.set('Content-Security-Policy', csp);
-  next();
-});
-if (isDev) {
-  console.log(
-    'Running in development mode - Proxying frontend routes to React Dev Server',
-  );
+if (shouldServeFrontend) {
+  // The web frontend.
+  // Dev mode proxies to Vite, which injects inline preamble scripts and uses
+  // a websocket for HMR. Loosen script-src and connect-src accordingly.
+  // `'unsafe-eval'` is required at runtime for the Electron app, so it is
+  // kept in both branches.
+  const scriptSrc = isDev
+    ? "'self' 'unsafe-inline' 'unsafe-eval' blob:"
+    : "'self' 'unsafe-eval' blob:";
+  const connectSrc = isDev ? "'self' ws: wss: http: https:" : 'http: https:';
+  const csp = [
+    "default-src 'self' blob:",
+    "img-src 'self' blob: data:",
+    `script-src ${scriptSrc}`,
+    "style-src 'self' 'unsafe-inline'",
+    "font-src 'self' data:",
+    `connect-src ${connectSrc}`,
+  ].join('; ');
 
-  // Imported within Dev block to allow dev dependency in package.json (reduces package size in production)
-  const httpProxyMiddleware = await import('http-proxy-middleware');
+  app.use((req, res, next) => {
+    res.set('Cross-Origin-Opener-Policy', 'same-origin');
+    res.set('Cross-Origin-Embedder-Policy', 'require-corp');
+    res.set('Content-Security-Policy', csp);
+    next();
+  });
 
-  app.use(
-    httpProxyMiddleware.createProxyMiddleware({
-      target: 'http://localhost:3001',
-      changeOrigin: true,
-      ws: true,
-    }),
-  );
-} else {
-  console.log('Running in production mode - Serving static React app');
+  if (isDev) {
+    console.log(
+      'Running in development mode - Proxying frontend routes to React Dev Server',
+    );
 
-  app.use(express.static(config.get('webRoot'), { index: false }));
-  app.get('/{*splat}', (req, res) =>
-    res.sendFile('index.html', { root: config.get('webRoot') }),
-  );
+    // Imported within Dev block to allow dev dependency in package.json (reduces package size in production)
+    const httpProxyMiddleware = await import('http-proxy-middleware');
+
+    app.use(
+      httpProxyMiddleware.createProxyMiddleware({
+        target: 'http://localhost:3001',
+        changeOrigin: true,
+        ws: true,
+      }),
+    );
+  } else {
+    console.log('Running in production mode - Serving static React app');
+
+    app.use(express.static(config.get('webRoot'), { index: false }));
+    app.get('/{*splat}', (req, res) =>
+      res.sendFile('index.html', { root: config.get('webRoot') }),
+    );
+  }
 }
 
 export function parseHTTPSConfig(value: string) {

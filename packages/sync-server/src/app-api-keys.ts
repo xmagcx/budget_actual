@@ -2,8 +2,8 @@ import { createHash, randomBytes, randomUUID } from 'node:crypto';
 
 import express from 'express';
 
-import { getAccountDb } from './account-db';
-import { canAccessActiveFile } from './services/user-service';
+import { getAccountDbAsync } from './account-db';
+import { canAccessActiveFileAsync } from './services/user-service';
 import {
   errorMiddleware,
   requestLoggerMiddleware,
@@ -22,7 +22,7 @@ app.use((_req, res, next) => {
   next();
 });
 
-app.post('/', (req, res) => {
+app.post('/', async (req, res) => {
   const { name: rawName, fileIds, permissions = [] } = req.body ?? {};
   const name = typeof rawName === 'string' ? rawName.trim() : '';
   if (
@@ -41,7 +41,10 @@ app.post('/', (req, res) => {
   }
 
   const userId: string = res.locals.user_id;
-  if (!fileIds.every(id => canAccessActiveFile(id, userId))) {
+  const fileAccess = await Promise.all(
+    fileIds.map(id => canAccessActiveFileAsync(id, userId)),
+  );
+  if (!fileAccess.every(Boolean)) {
     res.status(403).send({ status: 'error', reason: 'file-access-denied' });
     return;
   }
@@ -51,26 +54,22 @@ app.post('/', (req, res) => {
   // Store only a digest of the randomly generated secret.
   const keyHash = createHash('sha256').update(key).digest('hex');
   const createdAt = Math.floor(Date.now() / 1000);
-  const db = getAccountDb();
-  db.transaction(() => {
-    db.mutate(
-      `INSERT INTO api_keys (id, user_id, name, key_hash, created_at)
+  const db = await getAccountDbAsync();
+  await db.batchMutate([
+    {
+      sql: `INSERT INTO api_keys (id, user_id, name, key_hash, created_at)
        VALUES (?, ?, ?, ?, ?)`,
-      [id, userId, name, keyHash, createdAt],
-    );
-    for (const permission of permissions) {
-      db.mutate(
-        'INSERT INTO api_key_permissions (key_id, permission) VALUES (?, ?)',
-        [id, permission],
-      );
-    }
-    for (const fileId of fileIds) {
-      db.mutate('INSERT INTO api_key_budgets (key_id, file_id) VALUES (?, ?)', [
-        id,
-        fileId,
-      ]);
-    }
-  });
+      params: [id, userId, name, keyHash, createdAt],
+    },
+    ...permissions.map(permission => ({
+      sql: 'INSERT INTO api_key_permissions (key_id, permission) VALUES (?, ?)',
+      params: [id, permission],
+    })),
+    ...fileIds.map(fileId => ({
+      sql: 'INSERT INTO api_key_budgets (key_id, file_id) VALUES (?, ?)',
+      params: [id, fileId],
+    })),
+  ]);
 
   res.status(201).send({
     status: 'ok',
@@ -78,14 +77,27 @@ app.post('/', (req, res) => {
   });
 });
 
-app.get('/', (_req, res) => {
+function parseJsonArray(value: unknown) {
+  if (typeof value !== 'string') {
+    return [];
+  }
+
+  try {
+    const parsed = JSON.parse(value);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+app.get('/', async (_req, res) => {
   const keys: {
     id: string;
     name: string;
     createdAt: number;
-    fileIds: string;
-    permissions: string;
-  }[] = getAccountDb().all(
+    fileIds: string | null;
+    permissions: string | null;
+  }[] = await (await getAccountDbAsync()).all(
     `SELECT id, name, created_at AS createdAt,
        (SELECT json_group_array(file_id) FROM api_key_budgets WHERE key_id = api_keys.id) AS fileIds,
        (SELECT json_group_array(permission) FROM api_key_permissions WHERE key_id = api_keys.id) AS permissions
@@ -96,14 +108,14 @@ app.get('/', (_req, res) => {
     status: 'ok',
     data: keys.map(({ fileIds, permissions, ...key }) => ({
       ...key,
-      fileIds: JSON.parse(fileIds),
-      permissions: JSON.parse(permissions),
+      fileIds: parseJsonArray(fileIds),
+      permissions: parseJsonArray(permissions),
     })),
   });
 });
 
-app.delete('/:id', (req, res) => {
-  const { changes } = getAccountDb().mutate(
+app.delete('/:id', async (req, res) => {
+  const { changes } = await (await getAccountDbAsync()).mutate(
     'DELETE FROM api_keys WHERE id = ? AND user_id = ?',
     [req.params.id, res.locals.user_id],
   );
