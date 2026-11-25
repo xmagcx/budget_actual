@@ -1,7 +1,7 @@
 import createDebug from 'debug';
 import type { Request, Response } from 'express';
 
-import { getGoCardlessErrorDetails } from './gocardless-error-details';
+import { getGoCardlessErrorDetails } from './gocardless-error-details.js';
 
 const debugSensitive = createDebug('actual-sensitive:bank-sync');
 

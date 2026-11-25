@@ -8,7 +8,7 @@ export {
   deserializeClock,
   type Clock,
   Timestamp,
-} from './crdt';
+} from './crdt/index.js';
 
 export {
   type EncryptedData,
@@ -21,6 +21,6 @@ export {
   MessageEnvelopeSchema,
   SyncRequestSchema,
   SyncResponseSchema,
-} from './proto/sync_pb';
+} from './proto/sync_pb.js';
 
 export { create, fromBinary, toBinary } from '@bufbuild/protobuf';
